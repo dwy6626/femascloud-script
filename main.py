@@ -1,18 +1,21 @@
 import requests
 from bs4 import BeautifulSoup
+import keyring
+import yaml
+
 import getpass
 import os
-import keyring
 import re
 
 
 class PunchSession:
-    def __init__(self, username):
-        self.username = username
+    def __init__(self, setting_path='./settings.yaml'):
+        with open(setting_path, 'r') as f:
+            self.settings = yaml.safe_load(f)
         self.session = requests.Session()
         self.logged_in = False
         self.payload = {
-            'data[Account][username]': self.username,
+            'data[Account][username]': self.settings['username'],
             'data[Account][passwd]': self.fetch_password(),
         }
 
@@ -25,13 +28,13 @@ class PunchSession:
         self.logged_in = True
         
     def fetch_password(self):
-        password = keyring.get_password(domain, self.username)
+        password = keyring.get_password(self.settings['subdomain'], self.settings['username'])
         if password is not None:
             return password
 
         print("請輸入密碼，密碼將自動儲存")
         password = getpass.getpass()
-        keyring.set_password(domain, self.username, password)
+        keyring.set_password(self.settings['subdomain'], self.settings['username'], password)
 
         return password
 
@@ -45,5 +48,5 @@ class PunchSession:
 
 
 if __name__ == '__main__':
-    session = PunchSession(YOUR_USER_NAME)
+    session = PunchSession()
     session.login()
