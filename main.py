@@ -15,14 +15,21 @@ class PunchSession:
             self.settings = yaml.safe_load(f)
         self.session = requests.Session()
         self.logged_in = False
-        self.payload = {
+        self.login_payload = {
             'data[Account][username]': self.settings['username'],
             'data[Account][passwd]': self.fetch_password(),
         }
-        self.base_uri = 'https://femascloud.com/{}'.format(self.settings['subdomain'])
 
+        self.payload_user_id = None
+        self.punch_payload = {
+            'data[ClockRecord][shift_id]': 27,
+            'data[ClockRecord][period]': 1,
+        }
+
+        self.base_uri = 'https://femascloud.com/{}'.format(self.settings['subdomain'])
+        self.punch_url = '{}/{}'.format(self.base_uri, 'users/clock_listing')
         self.date_format = '%m-%d'
-        
+
         self.re_raw = {
             'time': r'^\d{2}:\d{2}$',
             'date': r'^\d{2}-\d{2}\b',
@@ -32,13 +39,14 @@ class PunchSession:
         self.re = {k: re.compile(v) for k, v in self.re_raw.items()}
 
     def login(self):
-        self.session.post(self.base_uri + '/Accounts/login', data=self.payload) \
+        res = self.session.post(self.base_uri + '/Accounts/login', data=self.login_payload) \
                     .raise_for_status()
+        self.payload_user_id = self.soup(res).find(id = 'EboardBrowserUserId')['value']
         self.session.headers.update(
             {'referer': self.base_uri + '/users/main?from=/Accounts/login?ext=html'}
         )
         self.logged_in = True
-        
+
     def fetch_password(self):
         password = keyring.get_password(self.settings['subdomain'], self.settings['username'])
         if password is not None:
@@ -52,7 +60,7 @@ class PunchSession:
 
     def get_html(self):
         try:
-            response = self.session.get(self.base_uri + '/users/main', data=self.payload)
+            response = self.session.get(self.base_uri + '/users/main')
             response.raise_for_status()
             return response.text
 
@@ -110,7 +118,22 @@ class PunchSession:
             schedule_hash[latest_date]['in'],
             schedule_hash[latest_date]['out'],
         )
-        
+
+    def get_punch_payload(self, punch_type='in'):
+        payload = self.punch_payload.copy()
+        payload['data[ClockRecord][user_id]'] = self.payload_user_id
+        payload['data[AttRecord][user_id]'] = self.payload_user_id
+        payload['data[ClockRecord][clock_type]'] = 'S' if punch_type == 'in' else 'E'
+        return payload
+
+    def punch_in(self):
+        self.session.post(self.punch_url, data=self.get_punch_payload(punch_type='in')) \
+                    .raise_for_status()
+
+    def punch_out(self):
+        self.session.post(self.punch_url, data=self.get_punch_payload(punch_type='out')) \
+                    .raise_for_status()
+
 
 def popup(s):
     subprocess.check_output("osascript -e 'display dialog \"" + s + "\" buttons [\"Check In\", \"Check Out\", \"Cancel\"] giving up after 30'", shell = True)
@@ -119,5 +142,6 @@ def popup(s):
 if __name__ == '__main__':
     session = PunchSession()
     session.login()
+    session.punch_in()
     print(session.get_schedule())
     # popup(session.latest_punch_string())
