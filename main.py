@@ -22,12 +22,14 @@ class PunchSession:
         self.base_uri = 'https://femascloud.com/{}'.format(self.settings['subdomain'])
 
         self.date_format = '%m-%d'
-        self.re = {
-            'time': r'\b\d{2}:\d{2}\b',
-            'date': r'\b\d{2}-\d{2}\b'
+        
+        self.re_raw = {
+            'time': r'^\d{2}:\d{2}$',
+            'date': r'^\d{2}-\d{2}\b',
+            'schedule': r'\d{4}-\d{4}',
+            'scheduled_time': r'\b\d{4}\b'
         }
-        for k in self.re:
-            self.re[k] = re.compile(self.re[k])
+        self.re = {k: re.compile(v) for k, v in self.re_raw.items()}
 
     def login(self):
         self.session.post(self.base_uri + '/Accounts/login', data=self.payload) \
@@ -63,7 +65,7 @@ class PunchSession:
             html = self.get_html()
         return BeautifulSoup(html, 'html.parser')
 
-    def get_time(self):
+    def get_schedule(self):
         soup = self.soup()
         table = soup.find(id='att_status_listing')
         rows = table.find_all('tr')
@@ -81,23 +83,32 @@ class PunchSession:
             weekday = date[5:]
             date = datetime.strptime(date[:5], self.date_format) \
                            .replace(year=datetime.now().year)
+
+            schedule = r.find(text=self.re['schedule'])
+            if schedule is None:
+                scheduled_in = scheduled_out = None
+            else:
+                scheduled_in, scheduled_out = self.re['scheduled_time'].findall(schedule)[:2]
+
             rt[date] = {
                 'weekday': weekday,
+                'scheduled_in': scheduled_in,
+                'scheduled_out': scheduled_out,
                 'in': punches[0],
-                'out': punches[1]
+                'out': punches[1],
             }
 
         return rt
 
     def latest_punch_string(self):
-        time_hash = self.get_time()
-        latest_date = sorted(time_hash)[::-1].pop()
+        schedule_hash = self.get_schedule()
+        latest_date = sorted(schedule_hash).pop()
 
         return '{}{}\n    上班：{:10}\n    下班：{:10}'.format(
             latest_date.strftime(self.date_format),
-            time_hash[latest_date]['weekday'],
-            time_hash[latest_date]['in'],
-            time_hash[latest_date]['out'],
+            schedule_hash[latest_date]['weekday'],
+            schedule_hash[latest_date]['in'],
+            schedule_hash[latest_date]['out'],
         )
         
 
@@ -108,4 +119,5 @@ def popup(s):
 if __name__ == '__main__':
     session = PunchSession()
     session.login()
-    popup(session.latest_punch_string())
+    print(session.get_schedule())
+    # popup(session.latest_punch_string())
