@@ -20,7 +20,7 @@ def punch_out():
 def clear_job():
     schedule.clear('punch_in')
     schedule.clear('punch_out')
-
+    logger.warning("jobs clear")
 
 def set_job():
     schedule.every().wednesday.at(
@@ -42,13 +42,15 @@ def set_job():
     schedule.every().friday.at(
         str(AddableTime(18).random_after(13))
     ).do(punch_out).tag('punch_out') 
+    logger.warning("set jobs")
 
 
 schedule.every().wednesday.at('09:00').do(set_job)
 schedule.every().friday.at('18:30').do(clear_job)
 
 
+set_job()
+
 while True:
-    set_job()
     schedule.run_pending()
     time.sleep(1)
