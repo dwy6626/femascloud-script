@@ -11,12 +11,19 @@ import os
 import re
 
 
+class InvalidLogin(Exception):
+    pass
+
+
+class AuthError(Exception):
+    pass
+
+
 class PunchSession:
     def __init__(self, setting_path='./settings.yaml'):
         with open(setting_path, 'r') as f:
             self.settings = yaml.safe_load(f)
         self.session = requests.Session()
-        self.logged_in = False
         self.login_payload = {
             'data[Account][username]': self.settings['username'],
             'data[Account][passwd]': self.fetch_password(),
@@ -32,33 +39,64 @@ class PunchSession:
         self.punch_url = '{}/{}'.format(self.base_uri, 'users/clock_listing')
         self.date_format = '%m-%d'
 
-        self.re_raw = {
-            'time': r'^\d{2}:\d{2}$',
-            'date': r'^\d{2}-\d{2}\b',
-            'schedule': r'\d{4}-\d{4}',
-            'scheduled_time': r'\b\d{4}\b'
+        self.re = {
+            k: re.compile(v) for k, v in {
+                'time': r'^\d{2}:\d{2}$',
+                'date': r'^\d{2}-\d{2}\b',
+                'schedule': r'\d{4}-\d{4}',
+                'scheduled_time': r'\b\d{4}\b'
+            }.items()
         }
-        self.re = {k: re.compile(v) for k, v in self.re_raw.items()}
 
-    def login(self):
-        res = self.session.post(self.base_uri + '/Accounts/login', data=self.login_payload) \
-                    .raise_for_status()
-        self.payload_user_id = self.soup(res).find(id = 'EboardBrowserUserId')['value']
+    @staticmethod
+    def logged_in(soup):
+        return bool(soup.find(id="clock"))
+
+    def login(self, auto_modify=False):
+        try:
+            res = self._login()
+        except InvalidLogin as e:
+            soup = self.soup(res)
+            if soup.find(text='密碼已到期，請更換密碼！'):
+                if auto_modify:
+                    self.auto_modify_password()
+                else:
+                    self.modify_password()
+                res = self._login()
+            else:
+                raise e
+
+        soup = self.soup(res)
         self.session.headers.update(
             {'referer': self.base_uri + '/users/main?from=/Accounts/login?ext=html'}
         )
-        self.logged_in = True
+
+    def set_password(self, password=None):
+        keyring.set_password(
+            self.settings['subdomain'],
+            self.settings['username'],
+            password is None if getpass.getpass() else password
+        )
+
+    def modify_password(self):
+        print("請輸入新的密碼")
+        return self.set_password()
+
+    def auto_modify_password(self):
+        old_password = self.get_password()
+        new_password = old_password[1:] + old_password[:1]
+        self.set_password(new_password)
+
+    def get_password(self):
+        return keyring.get_password(self.settings['subdomain'], self.settings['username'])
 
     def fetch_password(self):
-        password = keyring.get_password(self.settings['subdomain'], self.settings['username'])
+        password = self.get_password()
         if password is not None:
             return password
 
         print("請輸入密碼，密碼將自動儲存")
-        password = getpass.getpass()
-        keyring.set_password(self.settings['subdomain'], self.settings['username'], password)
-
-        return password
+        return self.set_password()
 
     def get_html(self):
         try:
@@ -77,6 +115,9 @@ class PunchSession:
 
     def get_schedule(self):
         soup = self.soup()
+        if not self.logged_in(soup):
+            raise AuthError
+
         table = soup.find(id='att_status_listing')
         rows = table.find_all('tr')
 
@@ -121,17 +162,26 @@ class PunchSession:
             schedule_hash[latest_date]['out'],
         )
 
-    def get_punch_payload(self, punch_type='in'):
+    def punch_in(self):
+        return self.session.post(self.punch_url, data=self._get_punch_payload(punch_type='in')) \
+                           .raise_for_status()
+
+    def punch_out(self):
+        return self.session.post(self.punch_url, data=self._get_punch_payload(punch_type='out')) \
+                           .raise_for_status()
+
+    def _login(self):
+        res = self.session.post(self.base_uri + '/Accounts/login', data=self.login_payload) \
+                          .raise_for_status()
+        soup = self.soup(res)
+        if not self.logged_in(soup):
+            raise InvalidLogin
+
+        return res
+
+    def _get_punch_payload(self, punch_type='in'):
         payload = self.punch_payload.copy()
         payload['data[ClockRecord][user_id]'] = self.payload_user_id
         payload['data[AttRecord][user_id]'] = self.payload_user_id
         payload['data[ClockRecord][clock_type]'] = 'S' if punch_type == 'in' else 'E'
         return payload
-
-    def punch_in(self):
-        self.session.post(self.punch_url, data=self.get_punch_payload(punch_type='in')) \
-                    .raise_for_status()
-
-    def punch_out(self):
-        self.session.post(self.punch_url, data=self.get_punch_payload(punch_type='out')) \
-                    .raise_for_status()
