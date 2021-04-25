@@ -27,6 +27,7 @@ class PunchSession:
         self.login_payload = {
             'data[Account][username]': self.settings['username'],
             'data[Account][passwd]': self.fetch_password(),
+            'data[remember]': 0
         }
 
         self.payload_user_id = None
@@ -54,29 +55,27 @@ class PunchSession:
 
     def login(self, auto_modify=False):
         try:
-            res = self._login()
+            self._login()
         except InvalidLogin as e:
-            soup = self.soup(res)
-            if soup.find(text='密碼已到期，請更換密碼！'):
+            if e.args[0] == '密碼已到期，請更換密碼！':
                 if auto_modify:
                     self.auto_modify_password()
                 else:
                     self.modify_password()
-                res = self._login()
+                self._login()
             else:
                 raise e
 
-        soup = self.soup(res)
-        self.session.headers.update(
-            {'referer': self.base_uri + '/users/main?from=/Accounts/login?ext=html'}
-        )
-
     def set_password(self, password=None):
+        if password is None:
+            password = getpass.getpass()
+
         keyring.set_password(
             self.settings['subdomain'],
             self.settings['username'],
-            password is None if getpass.getpass() else password
+            password
         )
+        return password
 
     def modify_password(self):
         print("請輸入新的密碼")
@@ -85,7 +84,7 @@ class PunchSession:
     def auto_modify_password(self):
         old_password = self.get_password()
         new_password = old_password[1:] + old_password[:1]
-        self.set_password(new_password)
+        return self.set_password(new_password)
 
     def get_password(self):
         return keyring.get_password(self.settings['subdomain'], self.settings['username'])
@@ -175,9 +174,12 @@ class PunchSession:
                           .raise_for_status()
         soup = self.soup(res)
         if not self.logged_in(soup):
-            raise InvalidLogin
+            raise InvalidLogin(soup.find(id='flashMessage').text.strip())
 
-        return res
+        self.session.headers.update(
+            {'referer': self.base_uri + '/users/main?from=/Accounts/login?ext=html'}
+        )
+        self.payload_user_id = soup.find(id = 'EboardBrowserUserId')['value']
 
     def _get_punch_payload(self, punch_type='in'):
         payload = self.punch_payload.copy()

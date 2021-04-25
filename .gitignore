@@ -3,3 +3,4 @@ __pycache__
 *.html
 *.js
 settings.yaml
+*.pyc
